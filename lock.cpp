@@ -46,6 +46,10 @@ int coro_uthread_mutex_unlock(coro_lock_t *l)
         if ( lock->owner == coro_current_uthread() ) {
             ret = 0;
             lock->owner = INVALID_UTHREAD;
+            coro_event ev;
+            ev.event = UNLOCK_NOTIFY;
+            ev.lockid = *l;
+            ctx.curev = ev;
         }
     }
     return ret;
