@@ -10,6 +10,8 @@
 #include "util.h"
 
 #define MAX_UTHREAD 3000000
+#define MAX_SOCKS 65535
+#define MAX_LOCKS 65535
 
 global_context ctx;
 
@@ -40,7 +42,7 @@ int global_context::alloc_lockid()
 
 void global_context::release_lockid(int lockid)
 {
-    locks.erase(locks.find(lockid)); 
+    locks[lockid] = NULL;
 }
 
 static void io_back_to_main(int, short what, void *arg)
@@ -60,6 +62,8 @@ global_context::global_context()
     base = event_base_new();
 
     ths.resize(MAX_UTHREAD, NULL);
+    socks.resize(MAX_SOCKS, NULL);
+    locks.resize(MAX_LOCKS, NULL);
 
     srand(time(NULL));
 
@@ -99,12 +103,14 @@ global_context::~global_context()
 int accept_schedule(coro_event ev)
 {
     int ret = -1;
-    coro_sock *sock = ctx.socks.find(ev.sock)->second;
-    if ( sock->eventqueue.size() ) {
-        uthread_t tid = sock->eventqueue.front();
-        sock->eventqueue.pop();
-        coro_switcher_schedule_uthread(tid, 0);
-        ret = 0;
+    coro_sock *sock = ctx.socks[ev.sock];
+    if ( sock ) {
+        if ( sock->eventqueue.size() ) {
+            uthread_t tid = sock->eventqueue.front();
+            sock->eventqueue.pop();
+            coro_switcher_schedule_uthread(tid, 0);
+            ret = 0;
+        }
     }
     return ret;
 }
@@ -112,12 +118,14 @@ int accept_schedule(coro_event ev)
 int connect_schedule(coro_event ev)
 {
     int ret = -1;
-    coro_sock *sock = ctx.socks.find(ev.sock)->second;
-    if ( sock->eventqueue.size() ) {
-        uthread_t tid = sock->eventqueue.front();
-        sock->eventqueue.pop();
-        coro_switcher_schedule_uthread(tid, 0);
-        ret = 0;
+    coro_sock *sock = ctx.socks[ev.sock];
+    if ( sock ) {
+        if ( sock->eventqueue.size() ) {
+            uthread_t tid = sock->eventqueue.front();
+            sock->eventqueue.pop();
+            coro_switcher_schedule_uthread(tid, 0);
+            ret = 0;
+        }
     }
     return ret;
 }
@@ -125,13 +133,15 @@ int connect_schedule(coro_event ev)
 int read_schedule(coro_event ev)
 {
     int ret = -1;
-    coro_sock *sock = ctx.socks.find(ev.sock)->second;
-    SET_READ(sock->status);
-    if ( sock->readqueue.size() ) {
-        uthread_t tid = sock->readqueue.front();
-        sock->readqueue.pop();
-        coro_switcher_schedule_uthread(tid, 0);
-        ret = 0;
+    coro_sock *sock = ctx.socks[ev.sock];
+    if ( sock ) {
+        SET_READ(sock->status);
+        if ( sock->readqueue.size() ) {
+            uthread_t tid = sock->readqueue.front();
+            sock->readqueue.pop();
+            coro_switcher_schedule_uthread(tid, 0);
+            ret = 0;
+        }
     }
     return ret;
 }
@@ -139,12 +149,14 @@ int read_schedule(coro_event ev)
 int unlock_schedule(coro_event ev)
 {
     int ret = -1;
-    coro_lock *lock = ctx.locks.find(ev.lockid)->second;
-    if ( lock->wait.size() ) {
-        uthread_t tid = lock->wait.front();
-        lock->wait.pop();
-        coro_switcher_schedule_uthread(tid, 0);
-        ret = 0;
+    coro_lock *lock = ctx.locks[ev.lockid];
+    if ( lock ) {
+        if ( lock->wait.size() ) {
+            uthread_t tid = lock->wait.front();
+            lock->wait.pop();
+            coro_switcher_schedule_uthread(tid, 0);
+            ret = 0;
+        }
     }
     return ret;
 }
@@ -152,13 +164,15 @@ int unlock_schedule(coro_event ev)
 int write_schedule(coro_event ev)
 {
     int ret = -1;
-    coro_sock *sock = ctx.socks.find(ev.sock)->second;
-    SET_WRITE(sock->status);
-    if ( sock->writequeue.size() ) {
-        uthread_t tid = sock->writequeue.front();
-        sock->writequeue.pop();
-        coro_switcher_schedule_uthread(tid, 0);
-        ret = 0;
+    coro_sock *sock = ctx.socks[ev.sock];
+    if ( sock ) {
+        SET_WRITE(sock->status);
+        if ( sock->writequeue.size() ) {
+            uthread_t tid = sock->writequeue.front();
+            sock->writequeue.pop();
+            coro_switcher_schedule_uthread(tid, 0);
+            ret = 0;
+        }
     }
     return ret;
 }
@@ -167,20 +181,22 @@ int error_schedule(coro_event ev)
 {
     (void)ev;
     int ret = 0;
-    coro_sock *sock = ctx.socks.find(ev.sock)->second;
-    size_t size = sock->writequeue.size();
-    while ( size ) {
-        uthread_t tid = sock->writequeue.front();
-        sock->writequeue.pop();
-        coro_switcher_schedule_uthread(tid, -1);
-    }
-    auto it = ctx.socks.find(ev.sock);
-    if ( it != ctx.socks.end() ) {
-        size = sock->readqueue.size();
+    coro_sock *sock = ctx.socks[ev.sock];
+    if ( sock ) {
+        size_t size = sock->writequeue.size();
         while ( size ) {
-            uthread_t tid = sock->readqueue.front();
-            sock->readqueue.pop();
+            uthread_t tid = sock->writequeue.front();
+            sock->writequeue.pop();
             coro_switcher_schedule_uthread(tid, -1);
+        }
+        coro_sock *sock = ctx.socks[ev.sock];
+        if ( sock ) {
+            size = sock->readqueue.size();
+            while ( size ) {
+                uthread_t tid = sock->readqueue.front();
+                sock->readqueue.pop();
+                coro_switcher_schedule_uthread(tid, -1);
+            }
         }
     }
     return ret;
@@ -189,9 +205,8 @@ int error_schedule(coro_event ev)
 int eof_schedule(coro_event ev)
 {
     int ret = 0;
-    auto it = ctx.socks.find(ev.sock);
-    if ( it != ctx.socks.end() ) {
-        coro_sock *sock = it->second;
+    coro_sock *sock = ctx.socks[ev.sock];
+    if ( sock ) {
         size_t size = sock->writequeue.size();
         while ( size ) {
             uthread_t tid = sock->writequeue.front();
@@ -199,8 +214,8 @@ int eof_schedule(coro_event ev)
             size--;
             coro_switcher_schedule_uthread(tid, -1);
         }
-        auto it = ctx.socks.find(ev.sock);
-        if ( it != ctx.socks.end() ) {
+        coro_sock *sock = ctx.socks[ev.sock];
+        if ( sock ) {
             size = sock->readqueue.size();
             while ( size ) {
                 uthread_t tid = sock->readqueue.front();

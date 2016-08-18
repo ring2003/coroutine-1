@@ -167,8 +167,8 @@ typedef std::unordered_map<int, coro_sock*> sockmap;
 typedef std::unordered_map<unsigned int, coro_lock*> lockmap;
 #else
 typedef std::vector<uthread*> uthmap;
-typedef std::unordered_map<int, coro_sock*> sockmap;
-typedef std::unordered_map<unsigned int, coro_lock*> lockmap;
+typedef std::vector<coro_sock*> sockmap;
+typedef std::vector<coro_lock*> lockmap;
 #endif
 
 

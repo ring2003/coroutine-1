@@ -50,9 +50,9 @@
 //
 static coro_sock *find_sock_by_fd(int fd)
 {
-    auto it = ctx.socks.find(fd);
-    assert(it != ctx.socks.end());
-    return it->second;
+    coro_sock *sock = ctx.socks[fd];
+    assert(sock);
+    return sock;
 }
 
 static void set_io_status(unsigned int &status, io_status s)
@@ -356,9 +356,8 @@ static coro_sock * sock_assign(int fd, bufferevent *bev)
 int sock_close(int fd)
 {
     int ret = 0;
-    auto it = ctx.socks.find(fd);
-    if ( it != ctx.socks.end() ) {
-        coro_sock *sock = it->second;
+    coro_sock *sock = ctx.socks[fd];
+    if ( sock ) {
         if ( sock->bev ) {
             bufferevent_free(sock->bev);
         }
@@ -367,7 +366,7 @@ int sock_close(int fd)
                 ret = close(sock->sock);
             }
         }
-        ctx.socks.erase(it);
+        ctx.socks[fd] = NULL;
         delete sock;
     }
     return ret;

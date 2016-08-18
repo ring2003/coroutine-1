@@ -15,10 +15,9 @@ int coro_uthread_mutex_lock(coro_lock_t *l)
 {
     int ret = -1;
     uthread_t cur = coro_current_uthread();
-    coro_lock_t lock = *l;
-    auto it = ctx.locks.find(lock);
-    if ( it != ctx.locks.end() ) {
-        coro_lock *lock = it->second;
+    coro_lock_t lock_ = *l;
+    coro_lock * lock = ctx.locks[lock_];
+    if ( lock ) {
         if ( lock->owner != INVALID_UTHREAD ) {
             lock->wait.push(cur);
         }
@@ -39,10 +38,9 @@ int coro_uthread_mutex_lock(coro_lock_t *l)
 int coro_uthread_mutex_unlock(coro_lock_t *l)
 {
     int ret = -1;
-    coro_lock_t lock = *l;
-    auto it = ctx.locks.find(lock);
-    if ( it != ctx.locks.end() ) {
-        coro_lock *lock = it->second;
+    coro_lock_t lock_ = *l;
+    auto lock = ctx.locks[lock_];
+    if ( lock ) {
         if ( lock->owner == coro_current_uthread() ) {
             ret = 0;
             lock->owner = INVALID_UTHREAD;
@@ -58,15 +56,14 @@ int coro_uthread_mutex_unlock(coro_lock_t *l)
 int coro_uthread_mutex_release(coro_lock_t *l)
 {
     int ret = -1;
-    coro_lock_t lock = *l;
-    auto it = ctx.locks.find(lock);
-    if ( it != ctx.locks.end() ) {
-        auto lockobj = it->second;
-        if ( it->second->owner == INVALID_UTHREAD ) {
-            ctx.locks.erase(it);
+    coro_lock_t lock_ = *l;
+    coro_lock * lock = ctx.locks[lock_];
+    if ( lock ) {
+        if ( lock->owner == INVALID_UTHREAD ) {
+            ctx.locks[lock_] = NULL;
             ret = 0;
         }
-        delete lockobj;
+        delete lock;
     }
     return ret;
 }
