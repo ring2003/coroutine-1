@@ -13,9 +13,9 @@
 
 #include "sock.h"
 #include "lock.h"
+#include <string>
 
 coro_lock_t lock;
-
 
 ///////////////////////////////////////////////
 // utils
@@ -80,17 +80,32 @@ int entry2(void *arg)
 {
     (void)arg;
     struct sockaddr_in sin = get_addr("127.0.0.1:80");
-    int client  = sock_connect(-1, (struct sockaddr*)&sin, sizeof(sin));
+    int client = sock_socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+    if ( client < 0 ) {
+        return -1;
+    }
+    int ret = sock_connect(client, (struct sockaddr*)&sin, sizeof(sin));
+    if ( ret < 0 ) {
+        sock_close(client);
+        return -1;
+    }
     char buf[1024];
     strcpy(buf, "GET / HTTP/1.1\r\n\r\n");
     int len = strlen(buf);
     int l = sock_send_all(client, buf, len);
-    printf("send: %d\n", l);
+    if ( l < 0 ) {
+        sock_close(client);
+        return -1;
+    }
+    // printf("send: %d\n", l);
     memset(buf, 0, 1024);
-    sock_recv(client, buf, 1024);
-    printf("recvbuf: %s\n", buf);
+    l = sock_recv(client, buf, 1024);
+    if ( l < 0 ) {
+        sock_close(client);
+        return -1;
+    }
+    // printf("recvbuf: %s\n", buf);
     sock_close(client);
-    printf("done\n");
     return 0;
 }
 
@@ -101,7 +116,7 @@ int entry3(void *arg)
     uthread_t th = coro_create_uthread(entry2, NULL);
     coro_start_uthread(th);
     coro_join_uthread(th);
-    // coro_uthread_mutex_unlock(&lock);
+    coro_uthread_mutex_unlock(&lock);
     printf("wait sub entry3 end\n");
     return 0;
 }
@@ -137,22 +152,34 @@ int entry4(void *arg)
     return 0;
 }
 
-int main()
+int main(int argc, char **argv)
 {
+    int n = 500;
+    if ( argc > 1 ) {
+        n = std::stoi(argv[1]);
+    }
+
+    std::vector<uthread_t> tids;
     printf("start main\n");
     const char addr1[] = "127.0.0.1:30086";
     const char addr2[] = "127.0.0.1:20086";
     const char addr3[] = "127.0.0.1:40086";
+    for ( int j = 0; j < 100; j++ ) {
+        for ( int i = 0; i < n; i++ ) {
+            uthread_t tid = coro_create_uthread(entry2, NULL);
+            coro_start_uthread(tid);
+            tids.push_back(tid);
+        }
+        for ( int i = 0; i < n; i++ ) {
+            coro_join_uthread(tids[j * n + i]);
+        }
+    }
+    printf("done\n");
     uthread_t th1 = coro_create_uthread(entry, (void *)&addr1);
     uthread_t th2 = coro_create_uthread(entry2, NULL);
     uthread_t th3 = coro_create_uthread(entry3, (void *)&addr2);
-    uthread_t th4 = coro_create_uthread(entry2, NULL);
     uthread_t th5 = coro_create_uthread(entry5, (void *)&addr3);
-#if 0
-    uthread_t th6 = coro_create_uthread(entry4, (void *)&addr3);
-    coro_start_uthread(th6);
-    coro_join_uthread(th6);
-#endif
+    uthread_t th4 = coro_create_uthread(entry2, NULL);
     coro_uthread_mutex_init(&lock);
     coro_start_uthread(th1);
     coro_join_uthread(th1);
@@ -160,10 +187,11 @@ int main()
     coro_start_uthread(th2);
     coro_join_uthread(th2);
     printf("joined 2\n");
-    coro_start_uthread(th4);
     coro_start_uthread(th3);
     coro_join_uthread(th3);
     printf("joined 3\n");
+    coro_start_uthread(th4);
+    printf("join 4...\n");
     coro_join_uthread(th4);
     printf("joined 4\n");
     coro_start_uthread(th5);

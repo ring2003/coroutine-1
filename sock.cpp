@@ -24,6 +24,8 @@
 #include "coroutine.h"
 #include "util.h"
 
+//FIXME: sock_connect不使用bufferevent_socket_connect，自己实现
+
 // XXX:
 // 约定：
 //   1. 非读写的EVENT事件导致的socket状态变更
@@ -89,6 +91,7 @@ static void set_pending_status(coro_sock *sock, io_status sock_status, uthread_t
 {
     set_io_status(sock->status, sock_status);
     uthread *th = ctx.ths[tid];
+    th->pending_sock = sock;
     set_io_status(th->status, th_status);
 }
 
@@ -128,22 +131,22 @@ static void sock_buffer_error_event(bufferevent *bev, short what, void *arg)
     coro_event ev;
     ev.sock = bufferevent_getfd(bev);
     ev.sock = sock->sock;
-    if ( what & BEV_EVENT_CONNECTED ) {
-        ev.event = SOCK_CONNECT_NOTIFY;
-    }
-    else if ( what & BEV_EVENT_ERROR ) {
+    if ( what & BEV_EVENT_ERROR ) {
         SET_ERROR(sock->status);
         ev.event = SOCK_ERROR_NOTIFY;
     }
     else if ( what & BEV_EVENT_EOF ) {
         ev.event = SOCK_EOF_NOTIFY;
         SET_EOF(sock->status);
+        if ( evbuffer_get_length(bufferevent_get_input(sock->bev)) ) {
+            SET_READ(sock->status);
+            printf("set read: %d\n", ev.sock);
+        }
     }
     else {
         ; // pass
     }
     sock->ctx->curev = ev;
-    // TODO 
     coro_yield_uthread(ctx.io, 0);
 }
 
@@ -202,13 +205,20 @@ int sock_flush(int fd)
 ssize_t sock_send(int fd, char *buf, size_t size)
 {
     coro_sock *sock = find_sock_by_fd(fd);
+    sock->op = WRITING;
     ssize_t status = 0;
     uthread_t cur = coro_current_uthread();
     if ( TEST_WAIT_WRITE(sock->status) ) {
-        set_pending_status(sock, keep_status, cur, set_wait_write_status);
-        sock->writequeue.push(cur);
-        // TODO, add recv event
-        status = coro_schedule_uthread(cur, 0);
+        if ( TEST_EOF(sock->status) ) {
+            status = -1;
+            // SET_EOF(sock->status);
+        }
+        else {
+            set_pending_status(sock, keep_status, cur, set_wait_write_status);
+            sock->writequeue.push(cur);
+            // TODO, add recv event
+            status = coro_schedule_uthread(cur, 0);
+        }
     }
     int ret = status;
     if ( status >= 0 ) {
@@ -268,20 +278,27 @@ ssize_t sock_send_all(int fd, char *buf, size_t size)
 ssize_t sock_recv(int fd, char *buf, size_t size)
 {
     coro_sock *sock = find_sock_by_fd(fd);
+    sock->op = READING;
     ssize_t status = 0;
     // 调用sock_recv的时候，还没有进行yield
     // 所以，当前协程就是持有当前socket对象的协程
     // 因此，我们可以把当前协程加到socket的持有协程里面去
     uthread_t cur = coro_current_uthread();
     if ( TEST_WAIT_READ(sock->status) ) {
-        // 如果当前socket在等待读
-        // 那么说明当前协程已经无法继续往下执行了，
-        //  1. 协程会阻塞在当前socket的读队列里面
-        //  2. socket被阻塞在当前协程
-        //  发生了阻塞，那么我们需要切换到其他的协程上去，放弃继续执行机会
-        set_pending_status(sock, set_wait_read_status, cur, set_wait_read_status);
-        sock->readqueue.push(cur);
-        status = coro_schedule_uthread(cur, 0);
+        if ( TEST_EOF(sock->status) ) {
+            status = -1;
+            // SET_EOF(sock->status);
+        }
+        else {
+            // 如果当前socket在等待读
+            // 那么说明当前协程已经无法继续往下执行了，
+            //  1. 协程会阻塞在当前socket的读队列里面
+            //  2. socket被阻塞在当前协程
+            //  发生了阻塞，那么我们需要切换到其他的协程上去，放弃继续执行机会
+            set_pending_status(sock, set_wait_read_status, cur, set_wait_read_status);
+            sock->readqueue.push(cur);
+            status = coro_schedule_uthread(cur, 0);
+        }
     }
     // 执行到这里，说明我们完成了IO操作
     // 那么说明，我们的协程当前一定没有被阻塞，所以移除阻塞标志
@@ -318,7 +335,7 @@ int sock_socket(int domain, int type, int protocol)
         sock->sock = s;
         ctx.socks[s] = sock;
     }
-    return sock->sock;
+    return s;
 }
 
 static coro_sock * sock_assign(int fd, bufferevent *bev)
@@ -356,39 +373,38 @@ int sock_close(int fd)
     return ret;
 }
 
-int sock_connect(int s_, struct sockaddr *addr, socklen_t len)
+int sock_connect(int s, struct sockaddr *addr, socklen_t len)
 {
-    (void)s_;
     event_base *base = ctx.base;
-    struct bufferevent *bev = bufferevent_socket_new(base, -1, BEV_OPT_CLOSE_ON_FREE);
-    coro_sock * sock = sock_assign(-1, bev);
-    // struct bufferevent *bev = bufferevent_socket_new(base, sock->sock, BEV_OPT_CLOSE_ON_FREE);
+    struct bufferevent *bev = bufferevent_socket_new(base, s, BEV_OPT_CLOSE_ON_FREE);
+    coro_sock *sock = ctx.socks[s];
+    sock->op = CONNECTING;
+    SET_WAIT_CONNECT(sock->status);
     bufferevent_setcb(bev, sock_buffer_read_event, sock_buffer_write_event, sock_buffer_error_event, sock);
-    int ret = bufferevent_socket_connect(bev, addr, len);
+    sock->bev = bev;
+    int ret = connect(s, addr, len);
     if ( ret < 0 ) {
-        bufferevent_free(bev);
-        delete sock;
-        sock = NULL;
+        if ( errno == EINTR || errno == EINPROGRESS ) {
+            bufferevent_enable(bev, EV_READ | EV_WRITE | EV_PERSIST);
+            uthread_t cur = coro_current_uthread();
+            REMOVE_WAIT_CONNECT(sock->status);
+            set_pending_status(sock, set_wait_write_status, cur, set_wait_write_status);
+            sock->writequeue.push(cur);
+            ret = coro_schedule_uthread(cur, 0);
+        }
+        else if ( errno == ECONNREFUSED ) {
+            // nothing to do
+            // sock_close will free bufferevent
+            ret = -1;
+        }
     }
     else {
-        int s = bufferevent_getfd(bev);
-        sock->sock = s;
-        ctx.socks[s] = sock;
-
-        uthread_t cur = coro_current_uthread();
-        set_pending_status(sock, set_wait_connect_status, cur, set_wait_connect_status);
-        sock->eventqueue.push(cur);
-
-        ret = coro_schedule_uthread(cur, 0);
-
         REMOVE_WAIT_CONNECT(sock->status);
+        SET_WAIT_WRITE(sock->status);
+        uthread_t cur = coro_current_uthread();
 
         bufferevent_enable(bev, EV_READ | EV_WRITE);
         clear_pending_status(sock, cur);
-    }
-    ret = -1;
-    if ( sock ) {
-        ret = sock->sock;
     }
     return ret;
 }
@@ -448,6 +464,7 @@ static coro_sock* sock_accept_inner(coro_sock *sock, struct sockaddr *, socklen_
 int sock_accept(int fd, struct sockaddr *, socklen_t*)
 {
     coro_sock *sock = find_sock_by_fd(fd);
+    sock->op = ACCEPTING;
     coro_sock *client = NULL;
     uthread_t cur = coro_current_uthread();
     set_pending_status(sock, set_wait_accept_status, cur, set_wait_accept_status);

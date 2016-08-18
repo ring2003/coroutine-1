@@ -102,6 +102,7 @@ void coro_uthread_free(uthread_t tid)
         delete th->cs;
     }
     delete th;
+    ctx.ths[tid] = NULL;
 }
 
 // 多个协程同时join一个线程是未定义行为
@@ -109,20 +110,14 @@ void coro_uthread_free(uthread_t tid)
 int coro_join_uthread(uthread_t tid)
 {
     int ret = -1;
-    auto it = ctx.ths.find(tid);
-    if ( it != ctx.ths.end() ) {
-        uthread *th = it->second;
+    auto th = ctx.ths[tid];
+    if ( th != NULL ) {
         uthread_t tid = th->tid;
         uthread_t cur = coro_current_uthread(); 
         while ( true ) {
             th->pending = cur;
             if ( TEST_STOP(th->status) ) {
-                auto& ths = ctx.ths;
-                auto it = ths.find(tid);
-                if ( it != ths.end() ) {
-                    coro_uthread_free(tid);
-                    ths.erase(it);
-                }
+                coro_uthread_free(tid);
                 ret = 0;
                 break;
             }
