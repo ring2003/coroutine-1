@@ -1,8 +1,15 @@
 #include <assert.h>
 
+#include <event2/event.h>
+#include <event2/buffer.h>
+#include <event2/bufferevent.h>
+#include <evutil.h>
+
 #include "internal.h"
 #include "coroutine.h"
 #include "util.h"
+
+#define MAX_UTHREAD 3000000
 
 global_context ctx;
 
@@ -10,7 +17,8 @@ global_context ctx;
 int global_context::alloc_tid()
 {
     ++tid;
-    if ( tid == (unsigned int)(-1) ) {
+    // if ( tid == (unsigned int)(-1) ) {
+    if ( tid == MAX_UTHREAD ) {
         assert(0);
     }
     return tid;
@@ -18,7 +26,7 @@ int global_context::alloc_tid()
 
 void global_context::release_tid(int tid)
 {
-    ths.erase(ths.find(tid));
+    // ths.erase(ths.find(tid));
 }
 
 int global_context::alloc_lockid()
@@ -50,6 +58,8 @@ global_context::global_context()
     cur = 0;
     private_data = NULL;
     base = event_base_new();
+
+    ths.resize(MAX_UTHREAD, NULL);
 
     srand(time(NULL));
 
@@ -116,6 +126,7 @@ int read_schedule(coro_event ev)
 {
     int ret = -1;
     coro_sock *sock = ctx.socks.find(ev.sock)->second;
+    SET_READ(sock->status);
     if ( sock->readqueue.size() ) {
         uthread_t tid = sock->readqueue.front();
         sock->readqueue.pop();
@@ -142,6 +153,7 @@ int write_schedule(coro_event ev)
 {
     int ret = -1;
     coro_sock *sock = ctx.socks.find(ev.sock)->second;
+    SET_WRITE(sock->status);
     if ( sock->writequeue.size() ) {
         uthread_t tid = sock->writequeue.front();
         sock->writequeue.pop();
@@ -156,15 +168,20 @@ int error_schedule(coro_event ev)
     (void)ev;
     int ret = 0;
     coro_sock *sock = ctx.socks.find(ev.sock)->second;
-    while ( sock->writequeue.size() ) {
+    size_t size = sock->writequeue.size();
+    while ( size ) {
         uthread_t tid = sock->writequeue.front();
         sock->writequeue.pop();
-        coro_switcher_schedule_uthread(tid, 0);
+        coro_switcher_schedule_uthread(tid, -1);
     }
-    while ( sock->readqueue.size() ) {
-        uthread_t tid = sock->readqueue.front();
-        sock->readqueue.pop();
-        coro_switcher_schedule_uthread(tid, 0);
+    auto it = ctx.socks.find(ev.sock);
+    if ( it != ctx.socks.end() ) {
+        size = sock->readqueue.size();
+        while ( size ) {
+            uthread_t tid = sock->readqueue.front();
+            sock->readqueue.pop();
+            coro_switcher_schedule_uthread(tid, -1);
+        }
     }
     return ret;
 }
@@ -172,11 +189,26 @@ int error_schedule(coro_event ev)
 int eof_schedule(coro_event ev)
 {
     int ret = 0;
-    coro_sock *sock = ctx.socks.find(ev.sock)->second;
-    while ( sock->writequeue.size() ) {
-        uthread_t tid = sock->writequeue.front();
-        sock->writequeue.pop();
-        coro_switcher_schedule_uthread(tid, 0);
+    auto it = ctx.socks.find(ev.sock);
+    if ( it != ctx.socks.end() ) {
+        coro_sock *sock = it->second;
+        size_t size = sock->writequeue.size();
+        while ( size ) {
+            uthread_t tid = sock->writequeue.front();
+            sock->writequeue.pop();
+            size--;
+            coro_switcher_schedule_uthread(tid, -1);
+        }
+        auto it = ctx.socks.find(ev.sock);
+        if ( it != ctx.socks.end() ) {
+            size = sock->readqueue.size();
+            while ( size ) {
+                uthread_t tid = sock->readqueue.front();
+                sock->readqueue.pop();
+                size--;
+                coro_switcher_schedule_uthread(tid, -1);
+            }
+        }
     }
     return ret;
 }
@@ -184,7 +216,8 @@ int eof_schedule(coro_event ev)
 int join_schedule(coro_event ev)
 {
     int ret = -1;
-    uthread * th = ctx.ths.find(ev.tid)->second;
+    //uthread * th = ctx.ths.find(ev.tid)->second;
+    uthread * th = ctx.ths[ev.tid];
     if ( th->pending != INVALID_UTHREAD ) {
         ret = 0;
         coro_switcher_schedule_uthread(th->pending, 0);
@@ -225,9 +258,6 @@ static void schedule()
         }
         else if ( ev.event == UNLOCK_NOTIFY ) {
             ret = unlock_schedule(ev);
-        }
-        else if ( ev.event == END_THREAD_NOTIFY ) {
-            ret = join_schedule(ev);
         }
         else {
         }

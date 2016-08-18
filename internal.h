@@ -4,6 +4,7 @@
 #include <deque>
 #include <set>
 #include <map>
+#include <unordered_map>
 #include <vector>
 #include <atomic>
 
@@ -55,11 +56,16 @@ const unsigned int SOCK_ERROR   = 0x20;
 const unsigned int WAIT_JOIN    = 0x100;
 const unsigned int STOP         = 0x1000;
 
+const unsigned int CONNECTING = 0x1;
+const unsigned int ACCEPTING = 0x2;
+const unsigned int READING = 0x4;
+const unsigned int WRITING = 0x8;
+
 #define CLEAR_MASK(x) (x = 0)
 
 #define TEST_EOF(x) (x & SOCK_EOF)
 #define SET_ONLY_EOF(x) (x |= SOCK_EOF)
-#define SET_EOF(x) (SET_WAIT_WRITE(x), SET_ONLY_EOF(x))
+#define SET_EOF(x) ( x = SOCK_EOF )
 
 #define TEST_ERROR(x) (x & SOCK_ERROR)
 #define SET_ERROR(x) (x = SOCK_ERROR)
@@ -137,6 +143,7 @@ struct uthread_ {
     void *data;                     // 供用户使用，协程入口函数的参数
     void *private_data;
     free_data clean_private;        // 释放void *data
+    coro_sock *pending_sock;
 };
 
 typedef std::queue<uthread_t> uthread_queue;
@@ -145,7 +152,6 @@ struct coro_sock_ {
     uthread_queue readqueue;   // 被当前sock读事件阻塞的uthreads
     uthread_queue writequeue;  // 被当前sock写事件阻塞的uthreads
     uthread_queue eventqueue;  // 被当前sock connect/accept事件阻塞的uthreads
-    std::queue<int> accepted;
     bufferevent *bev;          // 当前sock对象用的buffer
     size_t hwm;                // buffer高水位
     size_t lwm;                // buffer低水位
@@ -153,10 +159,17 @@ struct coro_sock_ {
     int sock;                  // 当前sock对应的系统文件描述符
     global_context *ctx;       // 指向全局ctx
     void *data;                // 保留字段
+    int op;
 }; 
-typedef std::map<unsigned int, uthread*> uthmap;
-typedef std::map<int, coro_sock*> sockmap;
-typedef std::map<unsigned int, coro_lock*> lockmap;
+#if 0
+typedef std::unordered_map<unsigned int, uthread*> uthmap;
+typedef std::unordered_map<int, coro_sock*> sockmap;
+typedef std::unordered_map<unsigned int, coro_lock*> lockmap;
+#else
+typedef std::vector<uthread*> uthmap;
+typedef std::unordered_map<int, coro_sock*> sockmap;
+typedef std::unordered_map<unsigned int, coro_lock*> lockmap;
+#endif
 
 
 struct coro_lock_ {

@@ -2,6 +2,7 @@
 *.o
 *.so
 *.a
+.gdb_history
 core
 core.*
 vgcore.*

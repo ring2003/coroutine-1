@@ -46,7 +46,8 @@
 #define LIKELY(x) x
 #define UNLIKELY(x) x
 
-#define ALWAYS_INLINE __attribute__((always_inline))
+// #define ALWAYS_INLINE __attribute__((always_inline))
+#define ALWAYS_INLINE inline
 
 static_assert(DEFAULT_BUFFER_SIZE < (CORO_STACK_MIN + PTHREAD_STACK_MIN),
     "Request buffer fits inside coroutine stack");
