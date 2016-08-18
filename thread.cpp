@@ -32,7 +32,7 @@ int coro_tid_uthread(uthread_t th)
 
 uthread_t coro_current_uthread()
 {
-    return ctx.ths[ctx.cur]->tid;
+    return ctx.cur;
 }
 
 bool is_main_by_uthread(uthread_t th)

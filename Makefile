@@ -2,7 +2,7 @@ CC = gcc
 CXX = g++
 LD = g++
 AR = ar
-CFLAGS = -DUSE_VALGRIND -Wno-unused-function -O0 -g -Wall -c -Wno-attributes -fPIC -shared
+CFLAGS = -DUSE_VALGRIND -Wno-unused-function -O2 -g -Wall -c -Wno-attributes -fPIC -shared
 
 all: testsock liblxsock.a liblxsock.so
 
@@ -31,7 +31,7 @@ lock.o : lock.cpp internal.h
 	$(CXX) $(CFLAGS) -std=c++11 $< -o $@
 
 testsock: coro.o sock.o test.o util.o sched.o manager.o thread.o lock.o
-	$(CXX) -g -O0 -Wall $^ -o $@ -levent
+	$(CXX) -g -O2 -Wall $^ -o $@ -levent
 
 liblxsock.a: coro.o sock.o util.o sched.o manager.o thread.o lock.o
 	$(AR) rcs $@ $^

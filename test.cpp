@@ -98,12 +98,12 @@ int entry2(void *arg)
         return -1;
     }
     // printf("send: %d\n", l);
-    memset(buf, 0, 1024);
     l = sock_recv(client, buf, 1024);
     if ( l < 0 ) {
         sock_close(client);
         return -1;
     }
+    buf[l] = '\0';
     // printf("recvbuf: %s\n", buf);
     sock_close(client);
     return 0;
@@ -164,7 +164,7 @@ int main(int argc, char **argv)
     const char addr1[] = "127.0.0.1:30086";
     const char addr2[] = "127.0.0.1:20086";
     const char addr3[] = "127.0.0.1:40086";
-    for ( int j = 0; j < 100; j++ ) {
+    for ( int j = 0; j < 1000; j++ ) {
         for ( int i = 0; i < n; i++ ) {
             uthread_t tid = coro_create_uthread(entry2, NULL);
             coro_start_uthread(tid);
@@ -175,6 +175,7 @@ int main(int argc, char **argv)
         }
     }
     printf("done\n");
+#if 0
     uthread_t th1 = coro_create_uthread(entry, (void *)&addr1);
     uthread_t th2 = coro_create_uthread(entry2, NULL);
     uthread_t th3 = coro_create_uthread(entry3, (void *)&addr2);
@@ -198,5 +199,6 @@ int main(int argc, char **argv)
     printf("main wait join th5\n");
     coro_join_uthread(th5);
     coro_uthread_mutex_release(&lock);
+#endif
     return 0;
 }
