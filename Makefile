@@ -2,7 +2,7 @@ CC = gcc
 CXX = g++
 LD = g++
 AR = ar
-CFLAGS = -DUSE_VALGRIND -Wno-unused-function -O2 -g -Wall -c -Wno-attributes -fPIC -shared
+CFLAGS = -Wno-unused-function -O2 -g -Wall -c -Wno-attributes -fPIC -shared
 
 all: testsock liblxsock.a liblxsock.so
 

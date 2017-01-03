@@ -79,7 +79,7 @@ int entry(void *arg)
 int entry2(void *arg)
 {
     (void)arg;
-    struct sockaddr_in sin = get_addr("127.0.0.1:80");
+    struct sockaddr_in sin = get_addr("127.0.0.1:8080");
     int client = sock_socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
     if ( client < 0 ) {
         return -1;

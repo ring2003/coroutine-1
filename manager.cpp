@@ -95,7 +95,7 @@ global_context::~global_context()
     event_del(timer);
     event_free(timer);
     coro_uthread_free(self->tid);
-    coro_uthread_free(io);
+    //coro_uthread_free(io);
     coro_uthread_free(switcher);
     event_base_free(base);
 }
@@ -233,9 +233,11 @@ int join_schedule(coro_event ev)
     int ret = -1;
     //uthread * th = ctx.ths.find(ev.tid)->second;
     uthread * th = ctx.ths[ev.tid];
-    if ( th->pending != INVALID_UTHREAD ) {
-        ret = 0;
-        coro_switcher_schedule_uthread(th->pending, 0);
+    if (th) {
+      if ( th->pending != INVALID_UTHREAD ) {
+          ret = 0;
+          coro_switcher_schedule_uthread(th->pending, 0);
+      }
     }
     return ret;
 }

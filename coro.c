@@ -42,15 +42,15 @@
 #define CORO_STACK_MIN         (5 * (PTHREAD_STACK_MIN))
 #endif
 
-#define DEFAULT_BUFFER_SIZE 4096
+const int DEFAULT_BUFFER_SIZE = 4096;
+//#define DEFAULT_BUFFER_SIZE 4096
 #define LIKELY(x) x
 #define UNLIKELY(x) x
 
 // #define ALWAYS_INLINE __attribute__((always_inline))
 #define ALWAYS_INLINE inline
 
-static_assert(DEFAULT_BUFFER_SIZE < (CORO_STACK_MIN + PTHREAD_STACK_MIN),
-    "Request buffer fits inside coroutine stack");
+//static_assert(DEFAULT_BUFFER_SIZE < (CORO_STACK_MIN + PTHREAD_STACK_MIN), "Request buffer fits inside coroutine stack");
 
 typedef struct coro_defer_t_	coro_defer_t;
 
