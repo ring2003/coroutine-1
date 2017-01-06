@@ -188,6 +188,10 @@ int error_schedule(coro_event ev)
             uthread_t tid = sock->writequeue.front();
             sock->writequeue.pop();
             coro_switcher_schedule_uthread(tid, -1);
+            sock = ctx.socks[ev.sock];
+            if ( !sock ) {
+                break;
+            }
         }
         coro_sock *sock = ctx.socks[ev.sock];
         if ( sock ) {
@@ -196,6 +200,11 @@ int error_schedule(coro_event ev)
                 uthread_t tid = sock->readqueue.front();
                 sock->readqueue.pop();
                 coro_switcher_schedule_uthread(tid, -1);
+                // after schedule, sock maybe closed!
+                sock = ctx.socks[ev.sock];
+                if ( !sock ) {
+                    break;
+                }
             }
         }
     }
@@ -213,6 +222,10 @@ int eof_schedule(coro_event ev)
             sock->writequeue.pop();
             size--;
             coro_switcher_schedule_uthread(tid, -1);
+            sock = ctx.socks[ev.sock];
+            if ( !sock ) {
+                break;
+            }
         }
         coro_sock *sock = ctx.socks[ev.sock];
         if ( sock ) {
@@ -222,6 +235,10 @@ int eof_schedule(coro_event ev)
                 sock->readqueue.pop();
                 size--;
                 coro_switcher_schedule_uthread(tid, -1);
+                sock = ctx.socks[ev.sock];
+                if ( !sock ) {
+                    break;
+                }
             }
         }
     }
