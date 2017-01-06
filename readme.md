@@ -7,7 +7,8 @@ Base in Libevent and lwan's coroutine
 * 另外一个就是，coro的context切换是没有走glibc的context swap，因为这样会带来大量的cs开销，因为这是一个系统调用。但是，需要注意的是，coro的context swap并没有保存浮点寄存器，比如XMM之类的，所以，不是所有的场合都可以用的
 * crt里面有部分的函数是不允许使用的，比如strtok，gethostbyname之类的函数，他们内部有static变量，coroutine的实现，在一个线程上会执行多个coroutine，但是他们共享了一个static变量，就导致了这些C函数的不可重入，不过线程情况下，这个情况是一样的。但是，更加严重的是，tls变量，tls变量是线程局部共享的，在线程模型里面，是隔离的，但是在corotine上下文，就有问题，导致不可重入。
 * coroutine函数栈最好不要随意分配，最好是排列在一块连续的内存区域，然后维护一个专门的栈内存queue，用来写gdb辅助脚本调试，否则跨函数栈调试coroutine太麻烦，当然这个是debug功能
-   
+
+
 ### golang模型是GMP
 * 不能有join，因为coroutine完成以后，会被调度器拿去作为其他task的载体，因此需要做一个类似defer的功能。
 * 支持不同的P之间偷任务，那么，任务队列需要加锁，一个P代表一个OS thread。这种情况下，3个选择，一个是lock-free queue，一个是加锁，还一个选择是学pypy走stm，当然可以考虑HTM，但是HTM的cpu支持是问题。
