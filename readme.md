@@ -19,9 +19,10 @@ Base in Libevent and lwan's coroutine
 ### 协程调度模型：
 初始化的过程是这样子的，首先main协程启动io协程，然后io协程有个定时器，切回main协程，然后main协程启动switch协程，switch协程立马切回main，这个时候还没进入switch的调度死循环，然后，main协程完成了全局初始化，开始执行用户代码。io协程的定时器必须是永久定时器，否则可能出现这样的情况，某个时刻，main协程处理某个join事件，开始进入阻塞，然后切换到switch协程，不巧的是，switch协程调度的过程中，所有的其他协程，都没有发生任何的阻塞事件，自然退出了协程，这个时候，switch协程就会陷入到io携程中（因为发生了调度，所以一定会切换到io协程），然而io协程没有io事件触发他了，所以就永远不会切回到调度协程（io协程通过各种event切回到其他协程，但是这个时候没有io event了，就不可能切了），那么就变成了libevent空跑的状态了。
 
-init:  
-  main -> io（timer back to main) -> main -> switch (coro_yield_uthread back to main) -> main -> user code 
-running:
+* init:  
+  main -> io（timer back to main) -> main -> switch (coro_yield_uthread back to main) -> main -> user code
+
+* running:
  usercode -> switch(busy loop) -> io(event loop call sock event* back to usercode) -> usercode -> ....
 
 ### 一个已知的bug：
