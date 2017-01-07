@@ -341,12 +341,9 @@ int sock_socket(int domain, int type, int protocol)
         sock->status = 0;
         sock->sock = s;
         ctx.socks[s] = sock;
-        uthread_queue rq(new std::queue<uthread_t>);
-        uthread_queue wq(new std::queue<uthread_t>);
-        uthread_queue eq(new std::queue<uthread_t>);
-        sock->readqueue = rq;
-        sock->writequeue = wq;
-        sock->eventqueue = eq;
+        sock->readqueue = std::make_shared<std::queue<uthread_t>>();
+        sock->writequeue = std::make_shared<std::queue<uthread_t>>();
+        sock->eventqueue = std::make_shared<std::queue<uthread_t>>();
     }
     return s;
 }

@@ -115,6 +115,13 @@ int coro_join_uthread(uthread_t tid)
         uthread_t tid = th->tid;
         uthread_t cur = coro_current_uthread(); 
         while ( true ) {
+            // 如果调度到其他协程去了以后，join了协程，然后切回来了
+            // 这种行为其实是不允许的，不允许同时多次join同一个uthread
+            // 但是为了防止用户真的这样做了，所以直接返回-1
+            // 按照pthread的说法，这个行为是未定义的，所以崩溃也是允许的？！
+            if ( !th ) {
+                return -1;
+            }
             th->pending = cur;
             if ( TEST_STOP(th->status) ) {
                 coro_uthread_free(tid);
@@ -122,6 +129,7 @@ int coro_join_uthread(uthread_t tid)
                 break;
             }
             coro_schedule_uthread(cur, 0);
+            th = ctx.ths[tid];
         }
     }
     return ret;
