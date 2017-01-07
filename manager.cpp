@@ -105,9 +105,9 @@ int accept_schedule(coro_event ev)
     int ret = -1;
     coro_sock *sock = ctx.socks[ev.sock];
     if ( sock ) {
-        if ( sock->eventqueue.size() ) {
-            uthread_t tid = sock->eventqueue.front();
-            sock->eventqueue.pop();
+        if ( sock->eventqueue->size() ) {
+            uthread_t tid = sock->eventqueue->front();
+            sock->eventqueue->pop();
             coro_switcher_schedule_uthread(tid, 0);
             ret = 0;
         }
@@ -120,9 +120,9 @@ int connect_schedule(coro_event ev)
     int ret = -1;
     coro_sock *sock = ctx.socks[ev.sock];
     if ( sock ) {
-        if ( sock->eventqueue.size() ) {
-            uthread_t tid = sock->eventqueue.front();
-            sock->eventqueue.pop();
+        if ( sock->eventqueue->size() ) {
+            uthread_t tid = sock->eventqueue->front();
+            sock->eventqueue->pop();
             coro_switcher_schedule_uthread(tid, 0);
             ret = 0;
         }
@@ -136,9 +136,9 @@ int read_schedule(coro_event ev)
     coro_sock *sock = ctx.socks[ev.sock];
     if ( sock ) {
         SET_READ(sock->status);
-        if ( sock->readqueue.size() ) {
-            uthread_t tid = sock->readqueue.front();
-            sock->readqueue.pop();
+        if ( sock->readqueue->size() ) {
+            uthread_t tid = sock->readqueue->front();
+            sock->readqueue->pop();
             coro_switcher_schedule_uthread(tid, 0);
             ret = 0;
         }
@@ -151,9 +151,9 @@ int unlock_schedule(coro_event ev)
     int ret = -1;
     coro_lock *lock = ctx.locks[ev.lockid];
     if ( lock ) {
-        if ( lock->wait.size() ) {
-            uthread_t tid = lock->wait.front();
-            lock->wait.pop();
+        if ( lock->wait->size() ) {
+            uthread_t tid = lock->wait->front();
+            lock->wait->pop();
             coro_switcher_schedule_uthread(tid, 0);
             ret = 0;
         }
@@ -167,9 +167,9 @@ int write_schedule(coro_event ev)
     coro_sock *sock = ctx.socks[ev.sock];
     if ( sock ) {
         SET_WRITE(sock->status);
-        if ( sock->writequeue.size() ) {
-            uthread_t tid = sock->writequeue.front();
-            sock->writequeue.pop();
+        if ( sock->writequeue->size() ) {
+            uthread_t tid = sock->writequeue->front();
+            sock->writequeue->pop();
             coro_switcher_schedule_uthread(tid, 0);
             ret = 0;
         }
@@ -183,19 +183,26 @@ int error_schedule(coro_event ev)
     int ret = 0;
     coro_sock *sock = ctx.socks[ev.sock];
     if ( sock ) {
-        size_t size = sock->writequeue.size();
+        shared_ptr<std::queue<uthread_t>> rq;
+        shared_ptr<std::queue<uthread_t>> wq;
+        wq = sock->writequeue;
+        rq = sock->readqueue;
+        size_t size = wq->size();
         while ( size ) {
-            uthread_t tid = sock->writequeue.front();
-            sock->writequeue.pop();
+            uthread_t tid = wq->front();
+            wq->pop();
             coro_switcher_schedule_uthread(tid, -1);
+            size = wq->size();
         }
         coro_sock *sock = ctx.socks[ev.sock];
         if ( sock ) {
-            size = sock->readqueue.size();
+            size = rq->size();
+            size = sock->readqueue->size();
             while ( size ) {
-                uthread_t tid = sock->readqueue.front();
-                sock->readqueue.pop();
+                uthread_t tid = rq->front();
+                rq->pop();
                 coro_switcher_schedule_uthread(tid, -1);
+                size = rq->size();
             }
         }
     }
@@ -207,21 +214,28 @@ int eof_schedule(coro_event ev)
     int ret = 0;
     coro_sock *sock = ctx.socks[ev.sock];
     if ( sock ) {
-        size_t size = sock->writequeue.size();
+        shared_ptr<std::queue<uthread_t>> rq;
+        shared_ptr<std::queue<uthread_t>> wq;
+        wq = sock->writequeue;
+        rq = sock->readqueue;
+        size_t size = wq->size();
         while ( size ) {
-            uthread_t tid = sock->writequeue.front();
-            sock->writequeue.pop();
+            uthread_t tid = wq->front();
+            wq->pop();
             size--;
             coro_switcher_schedule_uthread(tid, -1);
+            size = wq->size();
         }
         coro_sock *sock = ctx.socks[ev.sock];
         if ( sock ) {
-            size = sock->readqueue.size();
+            size = rq->size();
             while ( size ) {
-                uthread_t tid = sock->readqueue.front();
-                sock->readqueue.pop();
+                uthread_t tid = rq->front();
+                rq->pop();
                 size--;
                 coro_switcher_schedule_uthread(tid, -1);
+                // 需要更新size，因为在其他的协程执行完毕以后，size可能改了
+                size = rq->size();
             }
         }
     }

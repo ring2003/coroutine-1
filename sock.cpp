@@ -24,9 +24,6 @@
 #include "coroutine.h"
 #include "util.h"
 
-//FIXME: sock_connect不使用bufferevent_socket_connect，自己实现
-
-// XXX:
 // 约定：
 //   1. 非读写的EVENT事件导致的socket状态变更
 //   由event回调来修改(CONNECT ACCEPT EOF ERROR)
@@ -35,19 +32,6 @@
 //   （上半段设置状态，下半段更新状态）
 
 
-// 增加一个调度协程，IO协程收到事件以后，第一次时间切换到调度协程
-// IO协程改成由调度协程启动
-// 然后调度协程负责把各种event里面的事件解析，然后去调度其他协程
-// 当协程自然退出，其他的协程都和主协程都在等待join的时候
-// 这个时候回回到调度协程或者主协程，而不是IO协程
-// 因为所有的工作协程都是被调度协程或者主协程唤醒的
-// 调度协程是肯定不会被IO和join，sleep事件阻塞的
-// 因此，调度协程在发现有协程退出以后
-// 可以检查是否有协程阻塞在join事件，如果有调度
-// 如果没有，切回主协程
-// 主协程这个时候一定不会被事件阻塞，一定就会继续运行下去
-//
-//
 static coro_sock *find_sock_by_fd(int fd)
 {
     coro_sock *sock = ctx.socks[fd];
@@ -156,18 +140,6 @@ static void sock_raw_accept_event(int s, short what, void *arg)
     (void)what;
     (void)s;
     global_context *ctx = (global_context *)arg;
-#if 0
-    int c = -1;
-    struct sockaddr_storage ss;
-    ev_socklen_t socklen = sizeof(ss);
-    while ( true ) {
-        c = accept4(s, (struct sockaddr*)&ss, &socklen, SOCK_NONBLOCK);
-        if ( errno == EAGAIN || errno == EINTR || errno == ECONNABORTED) {
-            continue;
-        }
-        break;
-    }
-#endif
     coro_event ev;
     ev.event = SOCK_ACCEPT_NOTIFY;
     ev.sock = s;
@@ -181,16 +153,23 @@ static void sock_raw_accept_event(int s, short what, void *arg)
 int sock_flush(int fd)
 {
     coro_sock *sock = find_sock_by_fd(fd);
+    if ( !sock ) {
+        return -1;
+    }
     bufferevent_disable(sock->bev, EV_READ);
     auto *buf = bufferevent_get_output(sock->bev);
     uthread_t cur = coro_current_uthread();
     size_t left = 0;
     int ret = 0;
     do {
+        coro_sock *sock = find_sock_by_fd(fd);
+        if ( !sock ) {
+            return -1;
+        }
         left = evbuffer_get_length(buf);
         if ( left > 0 ) {
             set_pending_status(sock, set_wait_write_status, cur, set_wait_write_status);
-            sock->writequeue.push(cur);
+            sock->writequeue->push(cur);
             int status = coro_schedule_uthread(cur, 0);
             if ( status < 0 ) {
                 ret = status;
@@ -205,6 +184,9 @@ int sock_flush(int fd)
 ssize_t sock_send(int fd, char *buf, size_t size)
 {
     coro_sock *sock = find_sock_by_fd(fd);
+    if ( !sock ) {
+        return -1;
+    }
     sock->op = WRITING;
     ssize_t status = 0;
     uthread_t cur = coro_current_uthread();
@@ -215,13 +197,14 @@ ssize_t sock_send(int fd, char *buf, size_t size)
         }
         else {
             set_pending_status(sock, keep_status, cur, set_wait_write_status);
-            sock->writequeue.push(cur);
+            sock->writequeue->push(cur);
             // TODO, add recv event
             status = coro_schedule_uthread(cur, 0);
         }
     }
     int ret = status;
-    if ( status >= 0 ) {
+    sock = find_sock_by_fd(fd);
+    if ( status >= 0 && sock ) {
         // 1. 协程没有进行调度，那么肯定可写
         // 2. 协程唤醒以后
         //   1) 写事件成功，那么一定可写
@@ -252,11 +235,13 @@ ssize_t sock_send(int fd, char *buf, size_t size)
 // sock_send_all不设置任何的sock的pengding队列
 // XXX:
 // 如果第一次sock_send_all分多次send
-// 中途某次send失败了（不是第一次）
-// 那么这个时候怎么处理？
+// 任何一次send失败，都当做失败
 ssize_t sock_send_all(int fd, char *buf, size_t size)
 {
     coro_sock *sock = find_sock_by_fd(fd);
+    if ( !sock ) {
+        return -1;
+    }
     ssize_t cnt = 0;
     ssize_t status = 0;
     uthread_t cur = coro_current_uthread();
@@ -265,7 +250,12 @@ ssize_t sock_send_all(int fd, char *buf, size_t size)
             cnt = -1;
             break;
         }
-        cnt += sock_send(sock->sock, buf + cnt, size);
+        ssize_t send_cnt = sock_send(sock->sock, buf + cnt, size);
+        // 如果某次send_all过程中出错，认定为全部send失败
+        if ( send_cnt < 0 ) {
+            return -1;
+        }
+        cnt += send_cnt;
         if ( (size_t)cnt < size ) {
             set_pending_status(sock, set_wait_write_status, cur, set_wait_write_status);
             status = coro_schedule_uthread(cur, 0);
@@ -278,6 +268,17 @@ ssize_t sock_send_all(int fd, char *buf, size_t size)
 ssize_t sock_recv(int fd, char *buf, size_t size)
 {
     coro_sock *sock = find_sock_by_fd(fd);
+    // 一个socket可能被多个协程持有，而这多个持有当前socket的协程，可能
+    // 当前并没有阻塞再这个socket上，考虑如下情况，某个持有当前socket的协程
+    // 释放了这个socket对象，那么，当某个持有这个socket的协程在使用这个socket的
+    // 时候，就可能无法通过fd反查socket了
+    // 所以，这里要重新尝试获取socket，判断socket对象是否有效
+    // 这里可能会有bug产生，因为fd是每次取最小的，如果close掉了，立马又创建了一个socket
+    // 那么2个fd是重复，因此，完善的解决方案大概是这样子的
+    // 但是这个情况在非协程环境也是存在的，因此，不做针对他的特殊处理了
+    if ( !sock ) {
+        return -1;
+    }
     sock->op = READING;
     ssize_t status = 0;
     // 调用sock_recv的时候，还没有进行yield
@@ -296,14 +297,20 @@ ssize_t sock_recv(int fd, char *buf, size_t size)
             //  2. socket被阻塞在当前协程
             //  发生了阻塞，那么我们需要切换到其他的协程上去，放弃继续执行机会
             set_pending_status(sock, set_wait_read_status, cur, set_wait_read_status);
-            sock->readqueue.push(cur);
+            sock->readqueue->push(cur);
             status = coro_schedule_uthread(cur, 0);
         }
     }
     // 执行到这里，说明我们完成了IO操作
     // 那么说明，我们的协程当前一定没有被阻塞，所以移除阻塞标志
+
+    // 假设read被阻塞了，那么，执行到这里一定是经历过调度，然后回来的
+    // 那么，我们就无法保证这个sock指针还是有效的，因为他可能被释放过了
+    // 因此这里要重新获取sock指针
+
     ssize_t ret = status;
-    if ( ret >= 0 ) {
+    sock = find_sock_by_fd(fd);
+    if ( ret >= 0 && sock ) {
 
         bufferevent * bev = sock->bev;
         struct evbuffer *input;
@@ -334,6 +341,12 @@ int sock_socket(int domain, int type, int protocol)
         sock->status = 0;
         sock->sock = s;
         ctx.socks[s] = sock;
+        uthread_queue rq(new std::queue<uthread_t>);
+        uthread_queue wq(new std::queue<uthread_t>);
+        uthread_queue eq(new std::queue<uthread_t>);
+        sock->readqueue = rq;
+        sock->writequeue = wq;
+        sock->eventqueue = eq;
     }
     return s;
 }
@@ -388,7 +401,7 @@ int sock_connect(int s, struct sockaddr *addr, socklen_t len)
             uthread_t cur = coro_current_uthread();
             REMOVE_WAIT_CONNECT(sock->status);
             set_pending_status(sock, set_wait_write_status, cur, set_wait_write_status);
-            sock->writequeue.push(cur);
+            sock->writequeue->push(cur);
             ret = coro_schedule_uthread(cur, 0);
         }
         else if ( errno == ECONNREFUSED ) {
@@ -440,9 +453,9 @@ static coro_sock* sock_accept_inner(coro_sock *sock, struct sockaddr *, socklen_
     // 让IO协程帮我们处理事件，完成accept通知
     // 如果accept操作是协程处理的，那么切回协程
     // 参看sock_accept_event_cb的切换规则，
-    // 因为WAIT_ACCEPT状态只有sock_accept_event_cb才能解除
-    // 因此这里这里一定是sock_accept_event_cb切换回来
-    // 因此，resume和yield返回值一定是sock_accept_event_cb返回的socket fd
+    // 因为WAIT_ACCEPT状态只有sock_raw_accept_event才能解除
+    // 因此这里这里一定是sock_raw_accept_event切换回来
+    // 因此，resume和yield返回值一定是sock_raw_accept_event返回的socket fd
     int ret = coro_schedule_uthread(cur, 0);
     event_del(ev);
     int s = sock->sock;
@@ -467,7 +480,7 @@ int sock_accept(int fd, struct sockaddr *, socklen_t*)
     coro_sock *client = NULL;
     uthread_t cur = coro_current_uthread();
     set_pending_status(sock, set_wait_accept_status, cur, set_wait_accept_status);
-    sock->eventqueue.push(cur);
+    sock->eventqueue->push(cur);
     client = sock_accept_inner(sock, NULL, NULL);
     // 对于一个accept成功的socket，我们认为他是可以写的
     // 因此我们给他增加写入标志
@@ -479,24 +492,20 @@ int sock_accept(int fd, struct sockaddr *, socklen_t*)
 
 int sock_listen(int fd, int backlog)
 {
-    coro_sock *sock = find_sock_by_fd(fd);
-    return listen(sock->sock, backlog);
+    return listen(fd, backlog);
 }
 
 int sock_bind(int fd, const struct sockaddr *addr, socklen_t len)
 {
-    coro_sock *sock = find_sock_by_fd(fd);
-    return bind(sock->sock, addr, len);
+    return bind(fd, addr, len);
 }
 
 int sock_setsockopt(int fd, int level, int optname, const void *optval, socklen_t optlen)
 {
-    coro_sock *sock = find_sock_by_fd(fd);
-    return setsockopt(sock->sock, level, optname, optval, optlen);
+    return setsockopt(fd, level, optname, optval, optlen);
 }
 
 int sock_getsockopt(int fd, int level, int optname, void *optval, socklen_t *optlen)
 {
-    coro_sock *sock = find_sock_by_fd(fd);
-    return getsockopt(sock->sock, level, optname, optval, optlen);
+    return getsockopt(fd, level, optname, optval, optlen);
 }

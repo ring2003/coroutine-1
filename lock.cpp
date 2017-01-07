@@ -8,6 +8,8 @@ int coro_uthread_mutex_init(coro_lock_t* lock)
     l->id = *lock;
     l->owner = INVALID_UTHREAD;
     ctx.locks[*lock] = l;
+    uthread_queue wq(new std::queue<uthread_t>);
+    l->wait = wq;
     return 0; 
 }
 
@@ -19,7 +21,7 @@ int coro_uthread_mutex_lock(coro_lock_t *l)
     coro_lock * lock = ctx.locks[lock_];
     if ( lock ) {
         if ( lock->owner != INVALID_UTHREAD ) {
-            lock->wait.push(cur);
+            lock->wait->push(cur);
         }
         while ( true ) {
             if ( lock->owner == INVALID_UTHREAD ) {
