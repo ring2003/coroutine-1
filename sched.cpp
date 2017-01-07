@@ -1,106 +1,317 @@
+#include <assert.h>
+
+#include <event2/event.h>
+#include <event2/buffer.h>
+#include <event2/bufferevent.h>
+#include <evutil.h>
+
 #include "internal.h"
-#include "sock.h"
-#include "thread.h"
-#include "sched.h"
-// yield 和 resume都会导致context swap
-// 都会主动触发协程的切换，因此我们要保存好自己的tid(协程id)
-// 当切换回来以后我们再设置回来
-// 那么，只要保证运行一个协程的时候，我们设置好了当前的tid
-// 那么我们的ctx.cur就永远是当前的正在运行的协程tid
-// 参考entry_point函数的实现，设置当前ctx.cur
-int coro_yield_uthread(uthread_t th, int yield_value)
-{
-#ifdef SWITCH_DEBUG
-    printf("yield begin current id: %d, target: %d\n", ctx.cur, th);
-#endif
-    int old_tid = ctx.cur;
-    int ret = coro_yield(ctx.ths[th]->coro, yield_value);
-    ctx.cur = old_tid;
-#ifdef SWITCH_DEBUG
-    printf("yield end current: %d from: %d\n", ctx.cur, th);
-#endif
-    return ret;
+#include "coroutine.h"
+#include "util.h"
 
+#define MAX_UTHREAD 3000000
+#define MAX_SOCKS 65535
+#define MAX_LOCKS 65535
+
+global_context ctx;
+
+// TODO, tid循环
+int global_context::alloc_tid()
+{
+    ++tid;
+    // if ( tid == (unsigned int)(-1) ) {
+    if ( tid == MAX_UTHREAD ) {
+        assert(0);
+    }
+    return tid;
 }
 
-int coro_resume_value_uthread(uthread_t th, int yield_value)
+void global_context::release_tid(int tid)
 {
-#ifdef SWITCH_DEBUG
-    printf("resume begin: current id: %d target: %d\n", ctx.cur, th);
-#endif
-    int old_tid = ctx.cur;
-    int ret = coro_resume_value(ctx.ths[th]->coro, yield_value);
-    ctx.cur = old_tid;
-#ifdef SWITCH_DEBUG
-    printf("resume end: current: %d from id: %d\n", ctx.cur, th);
-#endif
-    return ret;
+    // ths.erase(ths.find(tid));
 }
 
-int coro_resume_uthread(uthread_t th)
+int global_context::alloc_lockid()
 {
-    int old_tid = ctx.cur;
-#ifdef SWITCH_DEBUG
-    printf("resume begin: current id: %d target: %d\n", ctx.cur, th);
-#endif
-    int ret = coro_resume(ctx.ths[th]->coro);
-#ifdef SWITCH_DEBUG
-    printf("resume end: back from id: %d\n", th);
-#endif
-    ctx.cur = old_tid;
-    return ret;
+    ++lockid;
+    if ( lockid == (unsigned)(-1) ) {
+        assert(0);
+    }
+    return lockid;
 }
 
-int coro_start_uthread(uthread_t th)
+void global_context::release_lockid(int lockid)
 {
-    return coro_resume_uthread(th);
+    locks[lockid] = NULL;
 }
 
-// 此函数禁止在IO协程上下文调用，例如各种event事件
-// 因为IO协程需要yield回主线程，resume其他协程
-// 和上述的过程刚好相反！
-int coro_schedule_uthread(uthread_t cur, int yield_value)
+static void io_back_to_main(int, short what, void *arg)
 {
-    (void)yield_value;
-    bool bmain = is_main_by_uthread(cur);
+    (void)arg;
+    if ( what & EV_TIMEOUT ) {
+        coro_yield_uthread(ctx.io, 0);
+    }
+}
+
+global_context::global_context()
+{ 
+    tid = 0;
+    lockid = 0;
+    cur = 0;
+    private_data = NULL;
+    base = event_base_new();
+
+    ths.resize(MAX_UTHREAD, NULL);
+    socks.resize(MAX_SOCKS, NULL);
+    locks.resize(MAX_LOCKS, NULL);
+
+    srand(time(NULL));
+
+    coro_create_empty_uthread(tid);
+    self = ths[tid];
+
+    switcher = coro_create_uthread(schedule, this);
+    io = coro_create_uthread(ioloop, this);
+
+    struct timeval tv;
+    tv.tv_sec = 0;
+    // 100ms
+    tv.tv_usec = 100000;
+
+    timer = event_new(base, -1, EV_PERSIST, io_back_to_main, NULL);
+    evtimer_add(timer, &tv);
+
+    coro_resume_uthread(io);
+    coro_resume_uthread(switcher);
+}
+
+global_context::~global_context()
+{
+    // 当我们在某次event callback回调中回到主线程的话
+    // 我们bufferevent可能持有一个引用，还有解引用
+    // 如果我们直接退出，那么可能导致无法释放某些对象
+    // 虽然进程退出以后，内存会清理，但是为了完备性，我们还是切换一次，保证内存正常释放
+    coro_resume_uthread(io);
+    event_del(timer);
+    event_free(timer);
+    coro_uthread_free(self->tid);
+    coro_uthread_free(io);
+    coro_uthread_free(switcher);
+    event_base_free(base);
+}
+
+int accept_schedule(coro_event ev)
+{
     int ret = -1;
-    if ( bmain) {
-        ret = coro_resume_uthread(ctx.switcher);
-    }
-    else {
-        ret = coro_yield_uthread(cur, yield_value);
+    coro_sock *sock = ctx.socks[ev.sock];
+    if ( sock ) {
+        if ( sock->eventqueue->size() ) {
+            uthread_t tid = sock->eventqueue->front();
+            sock->eventqueue->pop();
+            coro_switcher_schedule_uthread(tid, 0);
+            ret = 0;
+        }
     }
     return ret;
 }
 
-int coro_switcher_schedule_uthread(uthread_t target, int yield_value)
+int connect_schedule(coro_event ev)
 {
-    bool bmain = is_main_by_uthread(target);
-    uthread_t cur = coro_current_uthread();
     int ret = -1;
-    if ( bmain ) {
-        ret = coro_yield_uthread(cur, yield_value);
-    }
-    else {
-        ret = coro_resume_value_uthread(target, yield_value);
+    coro_sock *sock = ctx.socks[ev.sock];
+    if ( sock ) {
+        if ( sock->eventqueue->size() ) {
+            uthread_t tid = sock->eventqueue->front();
+            sock->eventqueue->pop();
+            coro_switcher_schedule_uthread(tid, 0);
+            ret = 0;
+        }
     }
     return ret;
 }
 
-// 参见coro_shedule_uthread
-// 该函数只能在IO协程上下文调用，也就是各种event事件
-int coro_io_schedule_uthread(uthread_t target, int yield_value)
+int read_schedule(coro_event ev)
 {
-    bool bmain = is_main_by_uthread(target);
-    uthread_t cur = coro_current_uthread();
     int ret = -1;
-    if ( bmain ) {
-        ret = coro_yield_uthread(cur, yield_value);
-    }
-    else {
-        ret = coro_resume_value_uthread(target, yield_value);
+    coro_sock *sock = ctx.socks[ev.sock];
+    if ( sock ) {
+        SET_READ(sock->status);
+        if ( sock->readqueue->size() ) {
+            uthread_t tid = sock->readqueue->front();
+            sock->readqueue->pop();
+            coro_switcher_schedule_uthread(tid, 0);
+            ret = 0;
+        }
     }
     return ret;
 }
 
+int unlock_schedule(coro_event ev)
+{
+    int ret = -1;
+    coro_lock *lock = ctx.locks[ev.lockid];
+    if ( lock ) {
+        if ( lock->wait->size() ) {
+            uthread_t tid = lock->wait->front();
+            lock->wait->pop();
+            coro_switcher_schedule_uthread(tid, 0);
+            ret = 0;
+        }
+    }
+    return ret;
+}
 
+int write_schedule(coro_event ev)
+{
+    int ret = -1;
+    coro_sock *sock = ctx.socks[ev.sock];
+    if ( sock ) {
+        SET_WRITE(sock->status);
+        if ( sock->writequeue->size() ) {
+            uthread_t tid = sock->writequeue->front();
+            sock->writequeue->pop();
+            coro_switcher_schedule_uthread(tid, 0);
+            ret = 0;
+        }
+    }
+    return ret;
+}
+
+int error_schedule(coro_event ev)
+{
+    (void)ev;
+    int ret = 0;
+    coro_sock *sock = ctx.socks[ev.sock];
+    if ( sock ) {
+        shared_ptr<std::queue<uthread_t>> rq;
+        shared_ptr<std::queue<uthread_t>> wq;
+        wq = sock->writequeue;
+        rq = sock->readqueue;
+        size_t size = wq->size();
+        while ( size ) {
+            uthread_t tid = wq->front();
+            wq->pop();
+            coro_switcher_schedule_uthread(tid, -1);
+            size = wq->size();
+        }
+        coro_sock *sock = ctx.socks[ev.sock];
+        if ( sock ) {
+            size = rq->size();
+            size = sock->readqueue->size();
+            while ( size ) {
+                uthread_t tid = rq->front();
+                rq->pop();
+                coro_switcher_schedule_uthread(tid, -1);
+                size = rq->size();
+            }
+        }
+    }
+    return ret;
+}
+
+int eof_schedule(coro_event ev)
+{
+    int ret = 0;
+    coro_sock *sock = ctx.socks[ev.sock];
+    if ( sock ) {
+        shared_ptr<std::queue<uthread_t>> rq;
+        shared_ptr<std::queue<uthread_t>> wq;
+        wq = sock->writequeue;
+        rq = sock->readqueue;
+        size_t size = wq->size();
+        while ( size ) {
+            uthread_t tid = wq->front();
+            wq->pop();
+            size--;
+            coro_switcher_schedule_uthread(tid, -1);
+            size = wq->size();
+        }
+        coro_sock *sock = ctx.socks[ev.sock];
+        if ( sock ) {
+            size = rq->size();
+            while ( size ) {
+                uthread_t tid = rq->front();
+                rq->pop();
+                size--;
+                coro_switcher_schedule_uthread(tid, -1);
+                // 需要更新size，因为在其他的协程执行完毕以后，size可能改了
+                size = rq->size();
+            }
+        }
+    }
+    return ret;
+}
+
+int join_schedule(coro_event ev)
+{
+    int ret = -1;
+    //uthread * th = ctx.ths.find(ev.tid)->second;
+    uthread * th = ctx.ths[ev.tid];
+    if ( th ) {
+        if ( th->pending != INVALID_UTHREAD ) {
+            ret = 0;
+            coro_switcher_schedule_uthread(th->pending, 0);
+        }
+    }
+    return ret;
+}
+
+static void exit_schedule()
+{
+}
+
+static void schedule()
+{
+    int ret = -1;
+    coro_event ev = ctx.curev;
+    if ( ev.event != NONE_EVENT ) {
+        ctx.curev = {NONE_EVENT, {-1}};
+        if ( ev.event == END_THREAD_NOTIFY ) {
+            ret = join_schedule(ev);
+        }
+        else if ( ev.event == SOCK_ACCEPT_NOTIFY ) {
+            ret = accept_schedule(ev);
+        }
+        else if ( ev.event == SOCK_CONNECT_NOTIFY ) {
+            ret = connect_schedule(ev);
+        }
+        else if ( ev.event == SOCK_ERROR_NOTIFY ) {
+            ret = error_schedule(ev);
+        }
+        else if ( ev.event == SOCK_EOF_NOTIFY ) {
+            ret = eof_schedule(ev);
+        }
+        else if ( ev.event == SOCK_READ_NOTIFY ) {
+            ret = read_schedule(ev);
+        }
+        else if ( ev.event == SOCK_WRITE_NOTIFY ) {
+            ret = write_schedule(ev);
+        }
+        else if ( ev.event == UNLOCK_NOTIFY ) {
+            ret = unlock_schedule(ev);
+        }
+        else {
+        }
+    }
+    
+    if ( ret ) {
+        coro_resume_uthread(ctx.io);
+    }
+}
+
+int global_context::schedule(void *arg)
+{
+    global_context *ctx = (global_context *)arg;
+    coro_yield_uthread(ctx->switcher, 0);
+    while ( true ) {
+        ::schedule();
+    }
+    return 0;
+}
+
+int global_context::ioloop(void *arg)
+{
+    global_context *ctx = (global_context *)arg;
+    int ret = event_base_dispatch(ctx->base);
+    return ret;
+}
