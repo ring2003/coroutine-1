@@ -58,7 +58,9 @@ int entry(void *arg)
 
     int c;
     printf("wait accept begin...\n");
-    c = sock_accept(sock, NULL, NULL);
+    struct sockaddr_in client_addr;
+    socklen_t client_addr_len;
+    c = sock_accept(sock, (struct sockaddr *)&client_addr, &client_addr_len);
     printf("wait accept done\n");
     char buf[128];
     memset(buf, 0, 128);
