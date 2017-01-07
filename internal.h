@@ -191,8 +191,6 @@ struct coro_lock_ {
     uthread_t owner;
 };
 
-typedef coro_merge_queue<coro_event> event_merge_queue;
-typedef coro_normal_queue<coro_event> event_queue;
 class global_context {
 public:
     uthread_t switcher;             // 调度器所在的uthread

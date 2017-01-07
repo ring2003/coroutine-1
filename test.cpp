@@ -2,6 +2,9 @@
 #include <stdlib.h>
 #include <stdio.h>
 
+#include <string>
+#include <vector>
+
 #include <unistd.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
@@ -13,7 +16,6 @@
 
 #include "sock.h"
 #include "lock.h"
-#include <string>
 
 coro_lock_t lock;
 
