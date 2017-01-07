@@ -1,4 +1,4 @@
-### INSTALL instruction
+### INSTALL
 
 
 #### Checkout lwan official version, so you can easily setup a coro-server for testing.
@@ -8,7 +8,7 @@ Follow the install instruction in README.
 
 ./testrunner
 
-2. Build the event-coro
+#### Build the event-coro
 
 mkdir build
 
