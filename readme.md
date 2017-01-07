@@ -2,9 +2,6 @@
 
 Base in Libevent and lwan's coroutine
 
-# Need lwan testrunner started at 127.0.0.1:8080 (default)
-
-./main
 =======
 ### 关于coro这个coroutine实现
 * coroutine的实现有一个很麻烦的问题，就是函数的堆栈是固定，没有办法做到栈自动增长，os线的的栈是可以自动增长的。可以考虑在多分配一个页面作为函数栈，然后这个页面作为redzone，也就是设置这个页面不可读写，但是这样其实也保证不了大范围的越界，所以这里只能尽可能避免太深的栈调用和栈上大数组分配了。
