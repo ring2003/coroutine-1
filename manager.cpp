@@ -186,6 +186,7 @@ int error_schedule(coro_event ev)
         shared_ptr<std::queue<uthread_t>> rq;
         shared_ptr<std::queue<uthread_t>> wq;
         wq = sock->writequeue;
+        rq = sock->readqueue;
         size_t size = wq->size();
         while ( size ) {
             uthread_t tid = wq->front();
@@ -195,7 +196,6 @@ int error_schedule(coro_event ev)
         }
         coro_sock *sock = ctx.socks[ev.sock];
         if ( sock ) {
-            rq = sock->readqueue;
             size = rq->size();
             size = sock->readqueue->size();
             while ( size ) {
@@ -217,6 +217,7 @@ int eof_schedule(coro_event ev)
         shared_ptr<std::queue<uthread_t>> rq;
         shared_ptr<std::queue<uthread_t>> wq;
         wq = sock->writequeue;
+        rq = sock->readqueue;
         size_t size = wq->size();
         while ( size ) {
             uthread_t tid = wq->front();
@@ -227,7 +228,6 @@ int eof_schedule(coro_event ev)
         }
         coro_sock *sock = ctx.socks[ev.sock];
         if ( sock ) {
-            rq = sock->readqueue;
             size = rq->size();
             while ( size ) {
                 uthread_t tid = rq->front();
