@@ -56,9 +56,8 @@ int coro_start_uthread(uthread_t th)
     return coro_resume_uthread(th);
 }
 
-// 此函数禁止在IO协程上下文调用，例如各种event事件
-// 因为IO协程需要yield回主线程，resume其他协程
-// 和上述的过程刚好相反！
+// 此函数禁止在IO, switch协程上下文调用，例如各种event事件
+// 主协程和用户协程在调用过程中，需要唤醒switch或者是parent协程（最终唤醒switch）来触发调度
 int coro_schedule_uthread(uthread_t cur, int yield_value)
 {
     (void)yield_value;
@@ -73,6 +72,8 @@ int coro_schedule_uthread(uthread_t cur, int yield_value)
     return ret;
 }
 
+// 该函数只能在switch协程上下文调用
+// switch协程负责接收io协程或者是其他的协程抛过来的具体的event来触发调度规则
 int coro_switcher_schedule_uthread(uthread_t target, int yield_value)
 {
     bool bmain = is_main_by_uthread(target);
@@ -87,8 +88,8 @@ int coro_switcher_schedule_uthread(uthread_t target, int yield_value)
     return ret;
 }
 
-// 参见coro_shedule_uthread
 // 该函数只能在IO协程上下文调用，也就是各种event事件
+// IO协程需要yield回主线程，然后通过sock_event_* 或者是timer事件回到主协程
 int coro_io_schedule_uthread(uthread_t target, int yield_value)
 {
     bool bmain = is_main_by_uthread(target);

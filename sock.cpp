@@ -193,12 +193,10 @@ ssize_t sock_send(int fd, char *buf, size_t size)
     if ( TEST_WAIT_WRITE(sock->status) ) {
         if ( TEST_EOF(sock->status) ) {
             status = -1;
-            // SET_EOF(sock->status);
         }
         else {
             set_pending_status(sock, keep_status, cur, set_wait_write_status);
             sock->writequeue->push(cur);
-            // TODO, add recv event
             status = coro_schedule_uthread(cur, 0);
         }
     }
