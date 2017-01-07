@@ -191,6 +191,7 @@ int error_schedule(coro_event ev)
             uthread_t tid = wq->front();
             wq->pop();
             coro_switcher_schedule_uthread(tid, -1);
+            size = wq->size();
         }
         coro_sock *sock = ctx.socks[ev.sock];
         if ( sock ) {
@@ -201,6 +202,7 @@ int error_schedule(coro_event ev)
                 uthread_t tid = rq->front();
                 rq->pop();
                 coro_switcher_schedule_uthread(tid, -1);
+                size = rq->size();
             }
         }
     }
@@ -221,6 +223,7 @@ int eof_schedule(coro_event ev)
             wq->pop();
             size--;
             coro_switcher_schedule_uthread(tid, -1);
+            size = wq->size();
         }
         coro_sock *sock = ctx.socks[ev.sock];
         if ( sock ) {
