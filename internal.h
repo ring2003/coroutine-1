@@ -5,6 +5,7 @@
 #include <set>
 #include <map>
 #include <unordered_map>
+#include <memory>
 #include <vector>
 #include <atomic>
 
@@ -13,6 +14,8 @@
 #include <event2/bufferevent.h>
 
 #include "coroutine.h"
+
+using std::shared_ptr;
 
 struct coro_event_;
 typedef coro_event_ coro_event;
@@ -146,12 +149,13 @@ struct uthread_ {
     coro_sock *pending_sock;
 };
 
-typedef std::queue<uthread_t> uthread_queue;
+typedef std::shared_ptr<std::queue<uthread_t>> uthread_queue;
 // typedef iterable_queue<uthread *>uthread_queue;
 struct coro_sock_ {
     uthread_queue readqueue;   // 被当前sock读事件阻塞的uthreads
     uthread_queue writequeue;  // 被当前sock写事件阻塞的uthreads
     uthread_queue eventqueue;  // 被当前sock connect/accept事件阻塞的uthreads
+
     bufferevent *bev;          // 当前sock对象用的buffer
     size_t hwm;                // buffer高水位
     size_t lwm;                // buffer低水位

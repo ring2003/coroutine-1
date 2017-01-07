@@ -169,7 +169,7 @@ int sock_flush(int fd)
         left = evbuffer_get_length(buf);
         if ( left > 0 ) {
             set_pending_status(sock, set_wait_write_status, cur, set_wait_write_status);
-            sock->writequeue.push(cur);
+            sock->writequeue->push(cur);
             int status = coro_schedule_uthread(cur, 0);
             if ( status < 0 ) {
                 ret = status;
@@ -197,7 +197,7 @@ ssize_t sock_send(int fd, char *buf, size_t size)
         }
         else {
             set_pending_status(sock, keep_status, cur, set_wait_write_status);
-            sock->writequeue.push(cur);
+            sock->writequeue->push(cur);
             // TODO, add recv event
             status = coro_schedule_uthread(cur, 0);
         }
@@ -297,7 +297,7 @@ ssize_t sock_recv(int fd, char *buf, size_t size)
             //  2. socket被阻塞在当前协程
             //  发生了阻塞，那么我们需要切换到其他的协程上去，放弃继续执行机会
             set_pending_status(sock, set_wait_read_status, cur, set_wait_read_status);
-            sock->readqueue.push(cur);
+            sock->readqueue->push(cur);
             status = coro_schedule_uthread(cur, 0);
         }
     }
@@ -341,6 +341,12 @@ int sock_socket(int domain, int type, int protocol)
         sock->status = 0;
         sock->sock = s;
         ctx.socks[s] = sock;
+        uthread_queue rq(new std::queue<uthread_t>);
+        uthread_queue wq(new std::queue<uthread_t>);
+        uthread_queue eq(new std::queue<uthread_t>);
+        sock->readqueue = rq;
+        sock->writequeue = wq;
+        sock->eventqueue = eq;
     }
     return s;
 }
@@ -395,7 +401,7 @@ int sock_connect(int s, struct sockaddr *addr, socklen_t len)
             uthread_t cur = coro_current_uthread();
             REMOVE_WAIT_CONNECT(sock->status);
             set_pending_status(sock, set_wait_write_status, cur, set_wait_write_status);
-            sock->writequeue.push(cur);
+            sock->writequeue->push(cur);
             ret = coro_schedule_uthread(cur, 0);
         }
         else if ( errno == ECONNREFUSED ) {
@@ -474,7 +480,7 @@ int sock_accept(int fd, struct sockaddr *, socklen_t*)
     coro_sock *client = NULL;
     uthread_t cur = coro_current_uthread();
     set_pending_status(sock, set_wait_accept_status, cur, set_wait_accept_status);
-    sock->eventqueue.push(cur);
+    sock->eventqueue->push(cur);
     client = sock_accept_inner(sock, NULL, NULL);
     // 对于一个accept成功的socket，我们认为他是可以写的
     // 因此我们给他增加写入标志
