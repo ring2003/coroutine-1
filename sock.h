@@ -25,19 +25,4 @@ EXPORT_API int sock_setsockopt(int sock, int level, int optname, const void *opt
 
 EXPORT_API int sock_getsockopt(int sock, int level, int optname, void *optval, socklen_t *optlen);
 
-// uthread coroutine
-EXPORT_API uthread_t coro_create_uthread(uthread_entry cb, void *data);
-
-EXPORT_API int coro_start_uthread(uthread_t th);
-
-EXPORT_API int coro_join_uthread(uthread_t th);
-
-EXPORT_API uthread_t coro_current_uthread();
-
-EXPORT_API int coro_current_tid_uthread();
-EXPORT_API int coro_tid_uthread(uthread_t th);
-
-// sleep
-EXPORT_API int coro_sleep(int ms);
-
-
+// TODO: gethostbyname系列函数，可以考虑模拟libevent实现一个evutil_getaddrinfo函数

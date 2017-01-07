@@ -11,3 +11,5 @@ EXPORT_API uthread_t coro_create_empty_uthread(int tid);
 EXPORT_API void coro_uthread_free(uthread_t tid);
 EXPORT_API int coro_join_uthread(uthread_t tid);
 EXPORT_API int coro_sleep(int ms);
+EXPORT_API int coro_start_uthread(uthread_t th);
+EXPORT_API int coro_tid_uthread(uthread_t th);

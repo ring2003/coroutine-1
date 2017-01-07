@@ -170,7 +170,6 @@ coro_entry_point(coro_t *coro, coro_function_t func)
     int return_value = func(coro);
     coro->ended = true;
     coro_yield(coro, return_value);
-    // TODO add hook function, to do status switch
 }
 
 static void

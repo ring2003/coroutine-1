@@ -145,8 +145,17 @@ struct uthread_ {
     uthread_entry entry;            // 协程入口函数
     void *data;                     // 供用户使用，协程入口函数的参数
     void *private_data;
-    free_data clean_private;        // 释放void *data
+    free_data clean_private;        // 释放void *private_data
     coro_sock *pending_sock;
+                                    // 注意其实协程的方式，破坏了errno，因为一个线程下可能有N个协程，那么，每个协程要维护自己的独立errno
+                                    // 其实所有的unix api出错都会导致errno被刷新，但是，其他的unix api基本都是阻塞的
+                                    // 如果用户没有手工处理，我们可以认为上下文环境下，errno会被覆盖，但是文件操作可以是
+                                    // 被协程上下文调度切换的，那么，在切换的过程中，用户代码可能来不及感知errno就被覆盖了
+                                    // 所以需要手工保存。
+                                    // 但是支持errno不是一件简单的工作，linux在多线程环境下同样存在tls覆盖的文件，linux的做法是把errno改成了tls
+                                    // 通过这个方式来保证了在glibc在层面，errno在线程内部是正确的，但是我们协程是没有办法去做这件事的，因为
+                                    // 第三方的代码访问errno依旧是访问线程级别的tls，我们没办法修改第三方的代码让他访问到协程层面的errno，tls没办法做到协程绑定
+                                    // tls的线程访问绑定是os提供的机制，所以，这个问题只能放弃了，可能某些严格依赖errno的程序会有不适？
 };
 
 typedef std::shared_ptr<std::queue<uthread_t>> uthread_queue;
@@ -182,8 +191,6 @@ struct coro_lock_ {
     uthread_t owner;
 };
 
-typedef coro_merge_queue<coro_event> event_merge_queue;
-typedef coro_normal_queue<coro_event> event_queue;
 class global_context {
 public:
     uthread_t switcher;             // 调度器所在的uthread

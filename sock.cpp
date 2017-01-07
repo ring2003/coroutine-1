@@ -193,12 +193,10 @@ ssize_t sock_send(int fd, char *buf, size_t size)
     if ( TEST_WAIT_WRITE(sock->status) ) {
         if ( TEST_EOF(sock->status) ) {
             status = -1;
-            // SET_EOF(sock->status);
         }
         else {
             set_pending_status(sock, keep_status, cur, set_wait_write_status);
             sock->writequeue->push(cur);
-            // TODO, add recv event
             status = coro_schedule_uthread(cur, 0);
         }
     }
@@ -341,12 +339,9 @@ int sock_socket(int domain, int type, int protocol)
         sock->status = 0;
         sock->sock = s;
         ctx.socks[s] = sock;
-        uthread_queue rq(new std::queue<uthread_t>);
-        uthread_queue wq(new std::queue<uthread_t>);
-        uthread_queue eq(new std::queue<uthread_t>);
-        sock->readqueue = rq;
-        sock->writequeue = wq;
-        sock->eventqueue = eq;
+        sock->readqueue = std::make_shared<std::queue<uthread_t>>();
+        sock->writequeue = std::make_shared<std::queue<uthread_t>>();
+        sock->eventqueue = std::make_shared<std::queue<uthread_t>>();
     }
     return s;
 }
@@ -421,13 +416,11 @@ int sock_connect(int s, struct sockaddr *addr, socklen_t len)
     return ret;
 }
 
-static int do_accept(int sock)
+static int do_accept(int sock, struct sockaddr *addr, socklen_t *len)
 {
     int c = -1;
-    struct sockaddr_storage ss;
-    ev_socklen_t socklen = sizeof(ss);
     while ( true ) {
-        c = accept4(sock, (struct sockaddr*)&ss, &socklen, SOCK_NONBLOCK);
+        c = accept4(sock, addr, len, SOCK_NONBLOCK);
         if ( c >= 0 ) {
             break;
         }
@@ -439,7 +432,7 @@ static int do_accept(int sock)
     return c;
 }
 
-static coro_sock* sock_accept_inner(coro_sock *sock, struct sockaddr *, socklen_t *)
+static coro_sock* sock_accept_inner(coro_sock *sock, struct sockaddr *addr, socklen_t *len)
 {
     event_base *base = ctx.base;
     uthread_t cur = coro_current_uthread();
@@ -461,7 +454,7 @@ static coro_sock* sock_accept_inner(coro_sock *sock, struct sockaddr *, socklen_
     int s = sock->sock;
     coro_sock *client = NULL;
     if ( ret >= 0 ) {
-        int c = do_accept(s);
+        int c = do_accept(s, addr, len);
         if ( c >= 0 ) {
             bufferevent *bev = bufferevent_socket_new(base, c, BEV_OPT_CLOSE_ON_FREE);
             client = sock_assign(c, bev);

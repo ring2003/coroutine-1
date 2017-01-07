@@ -18,25 +18,25 @@ sock.o : sock.cpp internal.h
 thread.o : thread.cpp internal.h
 	$(CXX) $(CFLAGS) -std=c++11 $< -o $@
 
-manager.o : manager.cpp internal.h
+sched.o : sched.cpp internal.h
 	$(CXX) $(CFLAGS) -std=c++11 $< -o $@
 
 util.o : util.cpp
 	$(CXX) $(CFLAGS) -std=c++11 $< -o $@
 
-sched.o : sched.cpp internal.h
+coro_context.o : coro_context.cpp internal.h
 	$(CXX) $(CFLAGS) -std=c++11 $< -o $@
 
 lock.o : lock.cpp internal.h
 	$(CXX) $(CFLAGS) -std=c++11 $< -o $@
 
-testsock: coro.o sock.o test.o util.o sched.o manager.o thread.o lock.o
+testsock: coro.o sock.o test.o util.o sched.o coro_context.o thread.o lock.o
 	$(CXX) -g -O2 -Wall $^ -o $@ -levent
 
-liblxsock.a: coro.o sock.o util.o sched.o manager.o thread.o lock.o
+liblxsock.a: coro.o sock.o util.o sched.o coro_context.o thread.o lock.o
 	$(AR) rcs $@ $^
 
-liblxsock.so: coro.o sock.o util.o sched.o manager.o thread.o lock.o
+liblxsock.so: coro.o sock.o util.o sched.o coro_context.o thread.o lock.o
 	$(CXX) -g -shared  $^ -o $@
 
 clean:
