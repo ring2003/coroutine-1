@@ -27,12 +27,6 @@ Base in Libevent and lwan's coroutine
 >
  usercode -> switch(busy loop) -> io(event loop call sock event* back to usercode) -> usercode -> ....
 
-### 一个已知的bug：
-多协程持有同一个socket，然后被调度切换中间有close的情况
-sock对象和thread对象都需要做成引用计数的方式，引用计数是被多少个协程引用，每个协程完成M以后，引用计数-1，只有引用计数为1的时候，才允许close释放，否则只是加上close标识
-目前是简单粗暴的发现sock对象是null的时候，直接退出接下来需要的coroutine调度，这样会导致，有协程可能会被调度器视而不见。
-不过从设计上，不推荐sock跨协程被共享
-
 ### 高低水位没有使用:
 sock里面的hwm和lwm本意是作为send的buffer的控制的，目前没有使用
 原本设计是这个字段是作为libevent的highwatermark设计的，这样可以防止内存暴涨，不设置highwatermark的话，内核不接受的send buffer会被一直缓存在libevent内部，可能导致内存暴涨
