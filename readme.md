@@ -13,8 +13,9 @@ Base in Libevent and lwan's coroutine
 * 不能有join，因为coroutine完成以后，会被调度器拿去作为其他task的载体，因此需要做一个类似defer的功能。
 * 支持不同的P之间偷任务，那么，任务队列需要加锁，一个P代表一个OS thread。这种情况下，3个选择，一个是lock-free queue，一个是加锁，还一个选择是学pypy走stm，当然可以考虑HTM，但是HTM的cpu支持是问题。
 * coroutine唤醒的mutex，mutex目前是轻量级的实现，只是一个标志位，在单线程情况下，没有问题。在多线程的情况下，需要膨胀，可以参考java的锁膨胀策略
-* 调度器优化，可能需要写一个公平调度。目前的调度模型，一个io coroutine，一个switch coroutine，一个main coroutine，io和switch 的parent是main，约定io和switch协程不允许创建协程，只有main和用户自定义的协程可以创建协程，每次调度，一旦有事件阻塞（sleep，lock，socket block...），立马切换到自己的parent协程，然后parent协程再发生阻塞，再切换到自己的父协程，直到最后一定会切换到main协程，main协程一直往下执行，直到main协程阻塞，他会切换到switch协程，然后switch协程陷入调度死循环，如果有协程被调度过，那么可能就有阻塞事件，那么唤醒io线程，否则switch协程等待阻塞事件，死循环。
+* 调度器优化，可能需要写一个公平调度。目前的调度模型，一个io coroutine，一个switch coroutine，一个main coroutine，io和switch 的parent是main，约定io和switch协程不允许创建协程，只有main和用户自定义的协程可以创建协程，每次调度，一旦有事件阻塞（sleep，lock，socket block...），立马切换到自己的parent协程，然后parent协程再发生阻塞，再切换到自己的父协程，直到最后一定会切换到main协程，main协程一直往下执行，直到main协程阻塞，他会切换到switch协程，然后switch协程陷入调度死循环，如果有协程被调度过，继续等待下一次调度，否则switch协程等待阻塞事件，唤醒io协程，等待io事件的死循环。
 因此，这个模型其实是一个回溯执行的过程，做不到公平调度，在某些特殊情况下，可能会存在饥渴。
+之所以采用这个设计还有一个原因，这个设计可以保证，总能回到主协程，然后主协程退出以后，如果main函数结束了，那么就等于退出了所有协程，模拟了主线程退出整个进程退出的情况
 
 ### 协程调度模型：
 初始化的过程是这样子的，首先main协程启动io协程，然后io协程有个定时器，切回main协程，然后main协程启动switch协程，switch协程立马切回main，这个时候还没进入switch的调度死循环，然后，main协程完成了全局初始化，开始执行用户代码。io协程的定时器必须是永久定时器，否则可能出现这样的情况，某个时刻，main协程处理某个join事件，开始进入阻塞，然后切换到switch协程，不巧的是，switch协程调度的过程中，所有的其他协程，都没有发生任何的阻塞事件，自然退出了协程，这个时候，switch协程就会陷入到io携程中（因为发生了调度，所以一定会切换到io协程），然而io协程没有io事件触发他了，所以就永远不会切回到调度协程（io协程通过各种event切回到其他协程，但是这个时候没有io event了，就不可能切了），那么就变成了libevent空跑的状态了。
