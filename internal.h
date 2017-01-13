@@ -3,6 +3,7 @@
 #include <queue>
 #include <deque>
 #include <set>
+#include <list>
 #include <map>
 #include <unordered_map>
 #include <memory>
@@ -133,6 +134,33 @@ struct coro_event_ {
 
     bool operator<(const coro_event_ &rhs) const { return sock < rhs.sock; }
 };
+
+typedef struct coro_stack_region_ coro_stack_region;
+typedef struct coro_stack_ coro_stack;
+typedef struct coro_stack_region_bucket_ coro_stack_region_bucket;
+
+struct coro_stack_ {
+    coro_stack_region *region;
+    uthread_t tid;                  // if tid is INVALID_UTHREAD, coro_stack is not in use
+    char stack[0];
+};
+
+struct coro_stack_region_ {
+    char *stacks;
+    size_t capacity;
+    size_t used;
+    // c++11开始，libstdc++ std::list:size的时间复杂度是O(1)，之前的版本时间复杂度是O(N)，what the fuck!
+    std::list<void*> free_stacks;
+    size_t stacksize;
+};
+
+// tid顺序分布在各个bucket中
+// 随着tid的回收，可能某些bucket里面会有空洞，但是不影响，对于一个确定的tid，他一定落在确定的bucket中
+struct coro_stack_region_bucket_ {
+    std::list<coro_stack_region> region_bucket;
+    size_t capacity;                // region_bucket * region_size
+};
+
 
 struct uthread_ {
     coro_t * coro;                  // 协程内部实现数据结构
